@@ -82,10 +82,8 @@ func (o *FileOutput) Initialize(fileName string) error {
 	if config.FileHandlerCompressData != false {
 		log.Info("File handler configured to compress data")
 		o.outputGzWriter = gzip.NewWriter(fp)
-		o.outputFile = o.outputGzWriter
-	} else {
-		o.outputFile = fp
 	}
+	o.outputFile = fp
 
 	o.fileOpenedAt = time.Now()
 	o.lastRolledOver = time.Now()
@@ -111,7 +109,6 @@ func (o *FileOutput) Go(messages <-chan string, errorChan chan<- error) error {
 		signal.Notify(term, syscall.SIGINT)
 
 		defer o.closeFile()
-		defer o.flushOutput(true)
 		defer signal.Stop(hup)
 		defer signal.Stop(term)
 
@@ -131,7 +128,6 @@ func (o *FileOutput) Go(messages <-chan string, errorChan chan<- error) error {
 						return
 					}
 				}
-				o.flushOutput(false)
 
 			case <-hup:
 				// reopen file
@@ -160,49 +156,24 @@ func (o *FileOutput) String() string {
 	return fmt.Sprintf("File %s", o.outputFileName)
 }
 
-func (o *FileOutput) flushOutput(force bool) error {
+func (o *FileOutput) output(s string) error {
+	var buffer bytes.Buffer
 
-	/*
-	 * 1000000ns = 1ms
-	 */
+	buffer.WriteString(s)
+	buffer.WriteString("\n")
 
-	if time.Since(o.bufferOutput.lastFlush).Nanoseconds() > 100000000 || force {
-
-		if config.FileHandlerCompressData && o.outputGzWriter != nil {
-
-			_, err := o.outputGzWriter.Write(o.bufferOutput.buffer.Bytes())
-			o.outputGzWriter.Flush()
-
-			if err != nil {
-				return err
-			}
-
-			o.bufferOutput.buffer.Reset()
-			o.bufferOutput.lastFlush = time.Now()
-			return nil
-
-		}
-		_, err := o.outputFile.Write(o.bufferOutput.buffer.Bytes())
-
+	if config.FileHandlerCompressData && o.outputGzWriter != nil {
+		_, err := o.outputGzWriter.Write(buffer.Bytes())
 		if err != nil {
 			return err
 		}
-
-		o.bufferOutput.buffer.Reset()
-		o.bufferOutput.lastFlush = time.Now()
-		return nil
-
+	} else {
+		_, err := o.outputFile.Write(buffer.Bytes())
+		if err != nil {
+			return err
+		}
 	}
 	return nil
-}
-
-func (o *FileOutput) output(s string) error {
-	/*
-	 * Write to our buffer first
-	 */
-	o.bufferOutput.buffer.WriteString(s + "\n")
-	err := o.flushOutput(false)
-	return err
 }
 
 func (o *FileOutput) rollOverFile(tf string) (string, error) {
@@ -218,6 +189,9 @@ func (o *FileOutput) rollOverFile(tf string) (string, error) {
 
 func (o *FileOutput) rollOverRename(tf string) (string, error) {
 	var newName string
+
+	o.closeFile()
+
 	if config.FileHandlerCompressData == true {
 		fileNameWithoutExtension := strings.TrimSuffix(o.outputFileName, ".gz")
 		newName = fileNameWithoutExtension + "." + o.lastRolledOver.Format(tf) + ".gz"
@@ -231,14 +205,17 @@ func (o *FileOutput) rollOverRename(tf string) (string, error) {
 		return "", err
 	}
 	return newName, nil
-
 }
 
 func (o *FileOutput) closeFile() {
+	if o.outputGzWriter != nil {
+		o.outputGzWriter.Flush()
+		o.outputGzWriter.Close()
+		o.outputGzWriter = nil
+	}
 	if o.outputFile != nil {
 		log.Debugf("Closing file %s", o.outputFileName)
 		o.outputFile.Close()
 		o.outputFile = nil
 	}
-
 }

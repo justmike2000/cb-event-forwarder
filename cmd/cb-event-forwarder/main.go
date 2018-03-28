@@ -327,7 +327,7 @@ func messageProcessingLoop(uri, queueName, consumerTag string) error {
 	c.conn.NotifyClose(connectionError)
 
 	numProcessors := runtime.NumCPU() * 2
-	log.Infof("Starting %d message processors\n", numProcessors)
+	log.Infof("Starting %d message processors", numProcessors)
 
 	wg.Add(numProcessors)
 	for i := 0; i < numProcessors; i++ {
