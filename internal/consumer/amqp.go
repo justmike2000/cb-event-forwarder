@@ -10,8 +10,7 @@ import (
 	"errors"
 	"expvar"
 	"fmt"
-	"github.com/carbonblack/cb-event-forwarder/internal/jsonmessageprocessor"
-	"github.com/carbonblack/cb-event-forwarder/internal/pbmessageprocessor"
+	"github.com/carbonblack/cb-event-forwarder/internal/messageprocessor"
 	"github.com/carbonblack/cb-event-forwarder/internal/sensor_events"
 	log "github.com/sirupsen/logrus"
 	"github.com/streadway/amqp"
@@ -38,7 +37,7 @@ func reportBundleDetails(routingKey string, body []byte, headers amqp.Table, deb
 	log.Errorf("Error while processing message through routing key %s:", routingKey)
 
 	var env *sensor_events.CbEnvironmentMsg
-	env, err := pbmessageprocessor.CreateEnvMessage(headers)
+	env, err := messageprocessor.CreateEnvMessage(headers)
 	if err != nil {
 		log.Errorf("  Message was received from sensor %d; hostname %s", env.Endpoint.GetSensorId(),
 			env.Endpoint.GetSensorHostName())
@@ -265,9 +264,10 @@ func NewConsumerFromConf(outputMessageFunc func(map[string]interface{}) error, s
 		}
 	} else {
 		//Default to ALL events
-		eventMap = map[string][]string{"events_watchlist": []string{
+		eventMap = map[string][]string{
+			"events_watchlist": []string{
 			"watchlist.#",
-		},
+			},
 			"events_feed": []string{
 				"feed.#",
 			},
@@ -330,8 +330,8 @@ type Consumer struct {
 	CbServerName              string
 	CbServerURL               string
 	PerformFeedPostprocessing bool
-	Jsmp                      jsonmessageprocessor.JsonMessageProcessor
-	Pbmp                      pbmessageprocessor.PbMessageProcessor
+	Jsmp                      messageprocessor.JsonMessageProcessor
+	Pbmp                      messageprocessor.PbMessageProcessor
 	status                    ConsumerStatus
 	wg                        sync.WaitGroup
 	OutputMessageFunc         func(msg map[string]interface{}) error
@@ -374,7 +374,7 @@ func NewConsumer(wg sync.WaitGroup, outputMessageFunc func(map[string]interface{
 	for _, rk := range routingKeys {
 		eventMap[rk] = true
 	}
-	pbmp := pbmessageprocessor.PbMessageProcessor{EventMap: eventMap}
+	pbmp := messageprocessor.PbMessageProcessor{EventMap: eventMap}
 	c.Pbmp = pbmp
 
 	return c, nil
