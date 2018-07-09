@@ -1,4 +1,4 @@
-package jsonmessageprocessor
+package messageprocessor
 
 import (
 	"bytes"
@@ -331,7 +331,7 @@ func MarshalJSON(msgs []map[string]interface{}) (string, error) {
 	var ret string
 
 	for _, msg := range msgs {
-		msg["cb_server"] = "cbserver"
+		//msg["cb_server"] = "cbserver"
 		marshaled, err := json.Marshal(msg)
 		if err != nil {
 			return "", err
@@ -343,10 +343,10 @@ func MarshalJSON(msgs []map[string]interface{}) (string, error) {
 }
 
 func (jsp *JsonMessageProcessor) ProcessJSON(routingKey string, indata []byte) ([]map[string]interface{}, error) {
+
 	var msg map[string]interface{}
 
 	decoder := json.NewDecoder(bytes.NewReader(indata))
-
 	// Ensure that we decode numbers in the JSON as integers and *not* float64s
 	decoder.UseNumber()
 
@@ -355,8 +355,10 @@ func (jsp *JsonMessageProcessor) ProcessJSON(routingKey string, indata []byte) (
 	}
 
 	msgs, err := jsp.ProcessJSONMessage(msg, routingKey)
+	log.Infof("%v",msgs)
 	if err != nil {
 		return nil, err
 	}
+
 	return msgs, nil
 }

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/carbonblack/cb-event-forwarder/internal/filter"
-	"github.com/carbonblack/cb-event-forwarder/internal/jsonmessageprocessor"
+	"github.com/carbonblack/cb-event-forwarder/internal/messageprocessor"
 	"io/ioutil"
 	"os"
 	"path"
@@ -144,7 +144,7 @@ func filterTestEvents(t *testing.T, outputDir string, filterFunc FilterFunc) {
 
 				msgs = filterFunc(msgs)
 				if msgs != nil && len(msgs) > 0 {
-					out, err := jsonmessageprocessor.MarshalJSON(msgs)
+					out, err := messageprocessor.MarshalJSON(msgs)
 					if err != nil {
 						t.Errorf("Error serializing %s: %s", path.Join(routingDir, fn.Name()), err)
 						continue

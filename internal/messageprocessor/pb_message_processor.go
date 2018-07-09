@@ -1,4 +1,4 @@
-package pbmessageprocessor
+package messageprocessor
 
 import (
 	"archive/zip"
@@ -8,6 +8,10 @@ import (
 	"fmt"
 	"github.com/carbonblack/cb-event-forwarder/internal/sensor_events"
 	"github.com/carbonblack/cb-event-forwarder/internal/util"
+
+	"bufio"
+	"encoding/json"
+	"github.com/golang/protobuf/jsonpb"
 	"github.com/golang/protobuf/proto"
 	log "github.com/sirupsen/logrus"
 	"github.com/streadway/amqp"
@@ -37,10 +41,6 @@ func GetProcessGUID(m *sensor_events.CbEventMsg) string {
 		return util.MakeGUID(SensorId, pid, createTime)
 	}
 	return fmt.Sprintf("%d", m.Header.GetProcessGuid())
-}
-
-type ConvertedCbMessage struct {
-	OriginalMessage *sensor_events.CbEventMsg
 }
 
 func (inmsg *ConvertedCbMessage) getStringByGUID(guid int64) (string, error) {
@@ -244,7 +244,6 @@ func (pb *PbMessageProcessor) ProcessProtobufMessage(routingKey string, body []b
 	outmsg := make(map[string]interface{})
 	outmsg["timestamp"] = util.WindowsTimeToUnixTimeFloat(inmsg.OriginalMessage.Header.GetTimestamp())
 	outmsg["process_create_time"] = util.WindowsTimeToUnixTimeFloat(inmsg.OriginalMessage.Header.GetProcessCreateTime())
-	outmsg["type"] = routingKey
 
 	outmsg["sensor_id"] = cbMessage.Env.Endpoint.GetSensorId()
 	outmsg["computer_name"] = cbMessage.Env.Endpoint.GetSensorHostName()
@@ -259,23 +258,23 @@ func (pb *PbMessageProcessor) ProcessProtobufMessage(routingKey string, body []b
 	switch {
 	case cbMessage.Process != nil:
 		if _, ok := pb.EventMap["ingress.event.process"]; ok {
-			pb.WriteProcessMessage(inmsg, outmsg)
+			WriteProcessMessage(inmsg, outmsg)
 		} else if _, ok := pb.EventMap["ingress.event.procstart"]; ok {
-			pb.WriteProcessMessage(inmsg, outmsg)
+			WriteProcessMessage(inmsg, outmsg)
 		} else if _, ok := pb.EventMap["ingress.event.procend"]; ok {
-			pb.WriteProcessMessage(inmsg, outmsg)
+			WriteProcessMessage(inmsg, outmsg)
 		} else {
 			return nil, nil
 		}
 	case cbMessage.Modload != nil:
 		if _, ok := pb.EventMap["ingress.event.moduleload"]; ok {
-			pb.WriteModloadMessage(inmsg, outmsg)
+			WriteModloadMessage(inmsg, outmsg)
 		} else {
 			return nil, nil
 		}
 	case cbMessage.Filemod != nil:
 		if _, ok := pb.EventMap["ingress.event.filemod"]; ok {
-			pb.WriteFilemodMessage(inmsg, outmsg)
+			WriteFilemodMessage(inmsg, outmsg)
 		} else {
 			return nil, nil
 		}
@@ -283,63 +282,63 @@ func (pb *PbMessageProcessor) ProcessProtobufMessage(routingKey string, body []b
 	case cbMessage.Networkv2 != nil:
 		gotNetworkV2Message = true
 		if _, ok := pb.EventMap["ingress.event.netconn"]; ok {
-			pb.WriteNetconn2Message(inmsg, outmsg)
+			WriteNetconn2Message(inmsg, outmsg)
 		} else {
 			return nil, nil
 		}
 	case cbMessage.Network != nil && !gotNetworkV2Message:
 		if _, ok := pb.EventMap["ingress.event.netconn"]; ok {
-			pb.WriteNetconnMessage(inmsg, outmsg)
+			WriteNetconnMessage(inmsg, outmsg)
 		} else {
 			return nil, nil
 		}
 	case cbMessage.Regmod != nil:
 		if _, ok := pb.EventMap["ingress.event.regmod"]; ok {
-			pb.WriteRegmodMessage(inmsg, outmsg)
+			WriteRegmodMessage(inmsg, outmsg)
 		} else {
 			return nil, nil
 		}
 	case cbMessage.Childproc != nil:
 		if _, ok := pb.EventMap["ingress.event.childproc"]; ok {
-			pb.WriteChildprocMessage(inmsg, outmsg)
+			WriteChildprocMessage(inmsg, outmsg)
 		} else {
 			return nil, nil
 		}
 	case cbMessage.Crossproc != nil:
 		if _, ok := pb.EventMap["ingress.event.crossprocopen"]; ok {
-			pb.WriteCrossProcMessage(inmsg, outmsg)
+			WriteCrossProcMessage(inmsg, outmsg)
 		} else {
 			return nil, nil
 		}
 	case cbMessage.Emet != nil:
 		if _, ok := pb.EventMap["ingress.event.emetmitigation"]; ok {
-			pb.WriteEmetEvent(inmsg, outmsg)
+			WriteEmetEvent(inmsg, outmsg)
 		} else {
 			return nil, nil
 		}
 	case cbMessage.NetconnBlockedv2 != nil:
 		gotNetblockV2Message = true
-		pb.WriteNetconn2BlockMessage(inmsg, outmsg)
+		WriteNetconn2BlockMessage(inmsg, outmsg)
 	case cbMessage.NetconnBlocked != nil && !gotNetblockV2Message:
-		pb.WriteNetconnBlockedMessage(inmsg, outmsg)
+		WriteNetconnBlockedMessage(inmsg, outmsg)
 	case cbMessage.TamperAlert != nil:
 		if _, ok := pb.EventMap["ingress.event.tamper"]; ok {
 			eventMsg = false
-			pb.WriteTamperAlertMsg(inmsg, outmsg)
+			WriteTamperAlertMsg(inmsg, outmsg)
 		} else {
 			return nil, nil
 		}
 	case cbMessage.Blocked != nil:
 		if _, ok := pb.EventMap["ingress.event.processblock"]; ok {
 			eventMsg = false
-			pb.WriteProcessBlockedMsg(inmsg, outmsg)
+			WriteProcessBlockedMsg(inmsg, outmsg)
 		} else {
 			return nil, nil
 		}
 	case cbMessage.Module != nil:
 		if _, ok := pb.EventMap["ingress.event.module"]; ok {
 			eventMsg = false
-			pb.WriteModinfoMessage(inmsg, outmsg)
+			WriteModinfoMessage(inmsg, outmsg)
 		} else {
 			return nil, nil
 		}
@@ -389,7 +388,7 @@ func (pb *PbMessageProcessor) ProcessProtobufMessage(routingKey string, body []b
 	}
 }
 
-func (pb *PbMessageProcessor) WriteProcessMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
+func WriteProcessMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
 	kv["event_type"] = "proc"
 
 	filePath, _ := message.getStringByGUID(message.OriginalMessage.Header.GetFilepathStringGuid())
@@ -439,21 +438,21 @@ func (pb *PbMessageProcessor) WriteProcessMessage(message *ConvertedCbMessage, k
 	}
 
 	// add link to process in the Cb UI if the Cb hostname is set
-	if pb.CbServerURL != "" {
-		kv["link_parent"] = fmt.Sprintf("%s#analyze/%s/0", pb.CbServerURL, kv["parent_process_guid"])
+	if message.CbServerURL != "" {
+		kv["link_parent"] = fmt.Sprintf("%s#analyze/%s/0", message.CbServerURL, kv["parent_process_guid"])
 	}
 
-	if message.OriginalMessage.Process.Username != nil {
-		kv["username"] = message.OriginalMessage.Process.GetUsername()
+	if om.Process.Username != nil {
+		kv["username"] = om.Process.GetUsername()
 	}
 
-	if message.OriginalMessage.Process.Uid != nil {
-		kv["uid"] = message.OriginalMessage.Process.GetUid()
+	if om.Process.Uid != nil {
+		kv["uid"] = om.Process.GetUid()
 	}
 
 }
 
-func (pb *PbMessageProcessor) WriteModloadMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
+func WriteModloadMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
 	kv["event_type"] = "modload"
 	kv["type"] = "ingress.event.moduleload"
 
@@ -461,7 +460,6 @@ func (pb *PbMessageProcessor) WriteModloadMessage(message *ConvertedCbMessage, k
 	kv["path"] = filePath
 	kv["md5"] = util.GetMd5Hexdigest(message.OriginalMessage.Modload.GetMd5Hash())
 	kv["sha256"] = util.GetSha256Hexdigest(message.OriginalMessage.Modload.GetSha256Hash())
-
 }
 
 func filemodAction(a sensor_events.CbFileModMsg_CbFileModAction) string {
@@ -478,7 +476,7 @@ func filemodAction(a sensor_events.CbFileModMsg_CbFileModAction) string {
 	return fmt.Sprintf("unknown (%d)", int32(a))
 }
 
-func (pb *PbMessageProcessor) WriteFilemodMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
+func WriteFilemodMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
 	kv["event_type"] = "filemod"
 	kv["type"] = "ingress.event.filemod"
 
@@ -503,7 +501,7 @@ func (pb *PbMessageProcessor) WriteFilemodMessage(message *ConvertedCbMessage, k
 	kv["tamper_sent"] = message.OriginalMessage.Filemod.GetTamperSent()
 }
 
-func (pb *PbMessageProcessor) WriteChildprocMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
+func WriteChildprocMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
 	kv["event_type"] = "childproc"
 	kv["type"] = "ingress.event.childproc"
 	om := message.OriginalMessage
@@ -530,8 +528,8 @@ func (pb *PbMessageProcessor) WriteChildprocMessage(message *ConvertedCbMessage,
 	kv["parent_guid"] = om.Childproc.GetParentGuid()
 
 	// add link to process in the Cb UI if the Cb hostname is set
-	if pb.CbServerURL != "" {
-		kv["link_child"] = fmt.Sprintf("%s#analyze/%s/0", pb.CbServerURL, kv["child_process_guid"])
+	if message.CbServerURL != "" {
+		kv["link_child"] = fmt.Sprintf("%s#analyze/%s/0", message.CbServerURL, kv["child_process_guid"])
 	}
 
 	kv["path"] = om.Childproc.GetPath()
@@ -567,7 +565,7 @@ func regmodAction(a sensor_events.CbRegModMsg_CbRegModAction) string {
 	return fmt.Sprintf("unknown (%d)", int32(a))
 }
 
-func (pb *PbMessageProcessor) WriteRegmodMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
+func WriteRegmodMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
 	kv["event_type"] = "regmod"
 	kv["type"] = "ingress.event.regmod"
 
@@ -580,7 +578,7 @@ func (pb *PbMessageProcessor) WriteRegmodMessage(message *ConvertedCbMessage, kv
 	kv["tamper_sent"] = message.OriginalMessage.Regmod.GetTamperSent()
 }
 
-func (pb *PbMessageProcessor) WriteNetconnMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
+func WriteNetconnMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
 	kv["event_type"] = "netconn"
 	kv["type"] = "ingress.event.netconn"
 
@@ -611,7 +609,7 @@ func (pb *PbMessageProcessor) WriteNetconnMessage(message *ConvertedCbMessage, k
 	}
 }
 
-func (pb *PbMessageProcessor) GetIPAddress(ipAddress *sensor_events.CbIpAddr) string {
+func GetIPAddress(ipAddress *sensor_events.CbIpAddr) string {
 	if ipAddress.GetBIsIpv6() {
 		b := make([]byte, 16)
 		binary.LittleEndian.PutUint64(b[:8], ipAddress.GetIpv6High())
@@ -626,7 +624,7 @@ func (pb *PbMessageProcessor) GetIPAddress(ipAddress *sensor_events.CbIpAddr) st
 	return util.GetIPv4Address(ipAddress.GetIpv4Address())
 }
 
-func (pb *PbMessageProcessor) WriteNetconn2Message(message *ConvertedCbMessage, kv map[string]interface{}) {
+func WriteNetconn2Message(message *ConvertedCbMessage, kv map[string]interface{}) {
 	kv["event_type"] = "netconn"
 	kv["type"] = "ingress.event.netconn"
 
@@ -658,7 +656,7 @@ func (pb *PbMessageProcessor) WriteNetconn2Message(message *ConvertedCbMessage, 
 	kv["local_port"] = util.Ntohs(uint16(message.OriginalMessage.Networkv2.GetLocalPort()))
 }
 
-func (pb *PbMessageProcessor) WriteModinfoMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
+func WriteModinfoMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
 	kv["event_type"] = "binary_info"
 	kv["type"] = "ingress.event.module"
 
@@ -741,7 +739,7 @@ func emetMitigationType(a *sensor_events.CbEmetMitigationAction) string {
 	return fmt.Sprintf("unknown (%d)", int32(mitigation))
 }
 
-func (pb *PbMessageProcessor) WriteEmetEvent(message *ConvertedCbMessage, kv map[string]interface{}) {
+func WriteEmetEvent(message *ConvertedCbMessage, kv map[string]interface{}) {
 	kv["event_type"] = "emet_mitigation"
 	kv["type"] = "ingress.event.emetmitigation"
 
@@ -762,7 +760,7 @@ func crossprocOpenType(a sensor_events.CbCrossProcessOpenMsg_OpenType) string {
 	return fmt.Sprintf("unknown (%d)", int32(a))
 }
 
-func (pb *PbMessageProcessor) WriteCrossProcMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
+func WriteCrossProcMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
 	kv["event_type"] = "cross_process"
 
 	om := message.OriginalMessage
@@ -799,8 +797,8 @@ func (pb *PbMessageProcessor) WriteCrossProcMessage(message *ConvertedCbMessage,
 	}
 
 	// add link to process in the Cb UI if the Cb hostname is set
-	if pb.CbServerURL != "" {
-		kv["link_target"] = fmt.Sprintf("%s#analyze/%s/0", pb.CbServerURL, kv["target_process_guid"])
+	if message.CbServerURL != "" {
+		kv["link_target"] = fmt.Sprintf("%s#analyze/%s/0", message.CbServerURL, kv["target_process_guid"])
 	}
 }
 
@@ -820,7 +818,7 @@ func tamperAlertType(a sensor_events.CbTamperAlertMsg_CbTamperAlertType) string 
 	return fmt.Sprintf("unknown (%d)", int32(a))
 }
 
-func (pb *PbMessageProcessor) WriteTamperAlertMsg(message *ConvertedCbMessage, kv map[string]interface{}) {
+func WriteTamperAlertMsg(message *ConvertedCbMessage, kv map[string]interface{}) {
 	kv["event_type"] = "tamper"
 	kv["type"] = "ingress.event.tamper"
 
@@ -857,7 +855,7 @@ func blockedProcessResult(a sensor_events.CbProcessBlockedMsg_BlockResult) strin
 	return fmt.Sprintf("unknown (%d)", int32(a))
 }
 
-func (pb *PbMessageProcessor) WriteProcessBlockedMsg(message *ConvertedCbMessage, kv map[string]interface{}) {
+func WriteProcessBlockedMsg(message *ConvertedCbMessage, kv map[string]interface{}) {
 	block := message.OriginalMessage.Blocked
 	kv["event_type"] = "blocked_process"
 	kv["type"] = "ingress.event.processblock"
@@ -885,8 +883,8 @@ func (pb *PbMessageProcessor) WriteProcessBlockedMsg(message *ConvertedCbMessage
 		om := message.OriginalMessage
 		kv["process_guid"] = util.MakeGUID(om.Env.Endpoint.GetSensorId(), int32(block.GetBlockedPid()), int64(block.GetBlockedProcCreateTime()))
 		// add link to process in the Cb UI if the Cb hostname is set
-		if pb.CbServerURL != "" {
-			kv["link_target"] = fmt.Sprintf("%s#analyze/%s/0", pb.CbServerURL, kv["target_process_guid"])
+		if message.CbServerURL != "" {
+			kv["link_target"] = fmt.Sprintf("%s#analyze/%s/0", message.CbServerURL, kv["target_process_guid"])
 		}
 	}
 
@@ -899,7 +897,7 @@ func (pb *PbMessageProcessor) WriteProcessBlockedMsg(message *ConvertedCbMessage
 	}
 }
 
-func (pb *PbMessageProcessor) WriteNetconnBlockedMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
+func WriteNetconnBlockedMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
 	kv["event_type"] = "blocked_netconn"
 	// TODO: need ingress event type for netconn blocks
 
@@ -926,7 +924,7 @@ func (pb *PbMessageProcessor) WriteNetconnBlockedMessage(message *ConvertedCbMes
 	}
 }
 
-func (pb *PbMessageProcessor) WriteNetconn2BlockMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
+func WriteNetconn2BlockMessage(message *ConvertedCbMessage, kv map[string]interface{}) {
 	kv["event_type"] = "blocked_netconn"
 	// TODO: need ingress event type for netconn blocks
 
@@ -959,6 +957,7 @@ func (pb *PbMessageProcessor) WriteNetconn2BlockMessage(message *ConvertedCbMess
 	}
 }
 
+/*
 func GetIPAddress(ipAddress *sensor_events.CbIpAddr) string {
 	if ipAddress.GetBIsIpv6() {
 		b := make([]byte, 16)
@@ -972,7 +971,7 @@ func GetIPAddress(ipAddress *sensor_events.CbIpAddr) string {
 		return ipString
 	}
 	return util.GetIPv4Address(ipAddress.GetIpv4Address())
-}
+}*/
 
 func (pbm *PbMessageProcessor) ProcessProtobuf(routingKey string, indata []byte) ([]map[string]interface{}, error) {
 	emptyHeaders := new(amqp.Table)
@@ -984,4 +983,114 @@ func (pbm *PbMessageProcessor) ProcessProtobuf(routingKey string, indata []byte)
 	msgs := make([]map[string]interface{}, 0, 0)
 	msgs = append(msgs, msg)
 	return msgs, nil
+}
+
+func (cbMessage *ConvertedCbMessage) MarshalJSONPB(marshaler *jsonpb.Marshaler) ([]byte, error) {
+
+	var b bytes.Buffer
+	writer := bufio.NewWriter(&b)
+	marshaler.Marshal(writer, cbMessage.OriginalMessage)
+	var blob = b.Bytes()
+	var outmsg map[string]interface{} = make(map[string]interface{})
+	json.Unmarshal(blob, &outmsg)
+
+	outmsg["timestamp"] = util.WindowsTimeToUnixTimeFloat(cbMessage.OriginalMessage.Header.GetTimestamp())
+	outmsg["process_create_time"] = util.WindowsTimeToUnixTimeFloat(cbMessage.OriginalMessage.Header.GetProcessCreateTime())
+
+	outmsg["sensor_id"] = cbMessage.OriginalMessage.Env.Endpoint.GetSensorId()
+	outmsg["computer_name"] = cbMessage.OriginalMessage.Env.Endpoint.GetSensorHostName()
+
+	// is the message from an endpoint event process?
+	eventMsg := true
+
+	// select only one of network or networkv2
+	gotNetworkV2Message := false
+	gotNetblockV2Message := false
+
+	switch {
+	case cbMessage.OriginalMessage.Process != nil:
+		WriteProcessMessage(cbMessage, outmsg)
+	case cbMessage.OriginalMessage.Modload != nil:
+		WriteModloadMessage(cbMessage, outmsg)
+	case cbMessage.OriginalMessage.Filemod != nil:
+		WriteFilemodMessage(cbMessage, outmsg)
+
+	case cbMessage.OriginalMessage.Networkv2 != nil:
+		gotNetworkV2Message = true
+		WriteNetconn2Message(cbMessage, outmsg)
+
+	case cbMessage.OriginalMessage.Network != nil && !gotNetworkV2Message:
+		WriteNetconnMessage(cbMessage, outmsg)
+
+	case cbMessage.OriginalMessage.Regmod != nil:
+		WriteRegmodMessage(cbMessage, outmsg)
+
+	case cbMessage.OriginalMessage.Childproc != nil:
+		WriteChildprocMessage(cbMessage, outmsg)
+	case cbMessage.OriginalMessage.Crossproc != nil:
+		WriteCrossProcMessage(cbMessage, outmsg)
+
+	case cbMessage.OriginalMessage.Emet != nil:
+		WriteEmetEvent(cbMessage, outmsg)
+
+	case cbMessage.OriginalMessage.NetconnBlockedv2 != nil:
+		gotNetblockV2Message = true
+		WriteNetconn2BlockMessage(cbMessage, outmsg)
+	case cbMessage.OriginalMessage.NetconnBlocked != nil && !gotNetblockV2Message:
+		WriteNetconnBlockedMessage(cbMessage, outmsg)
+	case cbMessage.OriginalMessage.TamperAlert != nil:
+		eventMsg = false
+		WriteTamperAlertMsg(cbMessage, outmsg)
+	case cbMessage.OriginalMessage.Blocked != nil:
+		eventMsg = false
+		WriteProcessBlockedMsg(cbMessage, outmsg)
+	case cbMessage.OriginalMessage.Module != nil:
+		eventMsg = false
+		WriteModinfoMessage(cbMessage, outmsg)
+	default:
+		// we ignore event types we don't understand yet.
+		return nil, nil
+	}
+
+	// write metadata about the process in case this message is generated by a process on an endpoint
+	if eventMsg {
+		processGUID := GetProcessGUID(cbMessage.OriginalMessage)
+		outmsg["process_guid"] = processGUID
+		outmsg["pid"] = cbMessage.OriginalMessage.Header.GetProcessPid()
+
+		if cbMessage.OriginalMessage.Header.ForkPid != nil {
+			outmsg["fork_pid"] = cbMessage.OriginalMessage.Header.GetForkPid()
+		}
+
+		/*
+		 * Sometimes Process path is empty
+		 */
+		if cbMessage.OriginalMessage.Header.GetProcessPath() != "" {
+			outmsg["process_path"] = cbMessage.OriginalMessage.Header.GetProcessPath()
+		}
+		if _, ok := outmsg["md5"]; !ok {
+			outmsg["md5"] = util.GetMd5Hexdigest(cbMessage.OriginalMessage.Header.GetProcessMd5())
+		}
+		if _, ok := outmsg["sha256"]; !ok {
+			outmsg["sha256"] = util.GetSha256Hexdigest(cbMessage.OriginalMessage.Header.GetProcessSha256())
+		}
+
+		// add link to process in the Cb UI if the Cb hostname is set
+		// TODO: not happy about reaching in to the "config" object for this
+		if cbMessage.CbServerURL != "" {
+
+			outmsg["link_process"] = util.FastStringConcat(
+				cbMessage.CbServerURL, "#analyze/", processGUID, "/0")
+
+			outmsg["link_sensor"] = util.FastStringConcat(
+				cbMessage.CbServerURL, "#/host/", strconv.Itoa(int(cbMessage.OriginalMessage.Env.Endpoint.GetSensorId())))
+		}
+	}
+	if len(outmsg) > 0 {
+		ret, err := json.Marshal(outmsg)
+		return ret, err
+	} else {
+		return nil, errors.New("Unable to process protobuf")
+	}
+
 }
